@@ -1,0 +1,13 @@
+[
+    {
+        "acao": "repetir",
+        "vezes": 4,
+        "corpo": [
+            {
+                "acao": "mover",
+                "direcao": "direita",
+                "passos": 2
+            }
+        ]
+    }
+]

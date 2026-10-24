@@ -1,0 +1,17 @@
+[
+    {
+        "acao": "mover",
+        "direcao": "baixo",
+        "passos": 1
+    },
+    {
+        "acao": "mover",
+        "direcao": "direita",
+        "passos": 9
+    },
+    {
+        "acao": "mover",
+        "direcao": "cima",
+        "passos": 1
+    }
+]

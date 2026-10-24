@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robô da Amazônia · Pensamento Algorítmico</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f2a1d; color: #e8f5e9; margin: 0; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  #layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  canvas { background: #2e5d3a; border-radius: 8px; display: block; max-width: 100%; }
+  #painel { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 8px; }
+  #chat { background: #132f22; border-radius: 8px; padding: 8px; height: 280px; overflow-y: auto; font-size: 14px; }
+  .msg { margin: 6px 0; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; }
+  .tutor { background: #1f4a33; }
+  .usuario { background: #33404a; text-align: right; }
+  .sistema { background: #4a3b1f; font-family: monospace; font-size: 12px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 60px; font-size: 14px; padding: 6px; }
+  button, select, input { font-size: 14px; padding: 6px 10px; margin: 2px 4px 2px 0; }
+  #log { font-family: monospace; font-size: 12px; background: #132f22; padding: 8px; border-radius: 8px; height: 110px; overflow-y: auto; }
+  #objetivo { font-size: 14px; margin: 8px 0 0; max-width: 640px; }
+  #chave-box { font-size: 12px; opacity: 0.85; }
+  #status { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: #1f3a5f; min-height: 18px; }
+  .conceito { background: #6b4f12; color: #ffe08a; border-radius: 4px; padding: 0 4px; cursor: pointer; text-decoration: underline dotted; }
+  #definicao { font-size: 13px; background: #1c3d2c; border-left: 4px solid #ffe08a; padding: 8px; border-radius: 6px; }
+  #definicao:empty { display: none; }
+  #stats { font-size: 13px; opacity: 0.9; min-height: 18px; }
+  #controles button { font-size: 12px; padding: 4px 8px; }
+</style>
+</head>
+<body>
+
+<h1>🤖 Robô da Amazônia · aprenda a pensar como programador</h1>
+
+<div id="layout">
+  <div>
+    <canvas id="tela" width="640" height="448"></canvas>
+    <div>
+      <select id="missao"></select>
+      <button id="reiniciar">Reiniciar missão</button>
+      <button id="dica">💡 Dica (0/3)</button>
+    </div>
+    <p id="objetivo"></p>
+    <div id="stats"></div>
+    <div id="controles">
+      <button id="c-inicio" disabled>⏮ Início</button>
+      <button id="c-ant" disabled>◀ Anterior</button>
+      <button id="c-play" disabled>▶ Continuar</button>
+      <button id="c-prox" disabled>Próximo ▶</button>
+      <button id="c-fim" disabled>Fim ⏭</button>
+      <button id="c-cancel" disabled>⏹ Cancelar</button>
+      <button id="c-rerun" disabled>🔁 Executar de novo</button>
+    </div>
+  </div>
+
+  <div id="painel">
+    <div id="chat"></div>
+    <div id="status">Pronto.</div>
+    <div id="definicao"></div>
+    <textarea id="entrada" placeholder="Descreva o que o robô deve fazer... (Enter envia)"></textarea>
+    <div>
+      <button id="enviar">Enviar ao tutor</button>
+      <button id="voz">🎤 Falar</button>
+    </div>
+
+    <details>
+      <summary>Modo manual (sem IA)</summary>
+      <textarea id="manual" placeholder='[{"acao":"mover","direcao":"direita","passos":3}]'></textarea>
+      <button id="executarManual">Executar JSON</button>
+    </details>
+
+    <div id="chave-box">
+      Chave da API (se não estiver no código):
+      <input id="chave" type="password" size="28">
+      <button id="salvarChave">Salvar</button>
+    </div>
+
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   CONFIGURAÇÃO
+   ========================================================================== */
+
+// api key aqui por conta do tempo curto do evento.
+// Mas, será guardada corretamente em servidor backend no futuro.
+const API_KEY = '';
+
+// Nome do modelo Gemma 4 na Gemini API. VERIFIQUE o nome exato na documentação.
+const GEMMA_MODEL = 'gemma-4-26b-a4b-it'; // alternativa: 'gemma-4-31b-it' (confirme no AI Studio)
+
+const COLS = 10, ROWS = 7, TILE = 64;
+const MAX_PASSOS = 120;   // trava contra laços infinitos
+const DELAY = 250;        // ms entre passos (para o público acompanhar)
+
+const ACOES = ['mover', 'pegar', 'apagar', 'se', 'repetir'];
+const DIRECOES = {
+  cima: { dx: 0, dy: -1 },
+  baixo: { dx: 0, dy: 1 },
+  esquerda: { dx: -1, dy: 0 },
+  direita: { dx: 1, dy: 0 }
+};
+const CONDICOES = ['tem_fogo', 'tem_agua'];
+
+/* ==========================================================================
+   MISSÕES
+   Coordenadas: x de 0 a 9 (esquerda → direita), y de 0 a 6 (cima → baixo)
+   ========================================================================== */
+
+const MISSOES = {
+  saida: {
+    titulo: 'Chegar à saída',
+    descricao: 'O robô começa no canto superior esquerdo e precisa chegar à saída 🚩. Há árvores 🌳 no caminho e o robô não pode atravessá-las.',
+    inicio: { x: 0, y: 0 },
+    saida: { x: 9, y: 0 },
+    arvores: [{ x: 4, y: 0 }, { x: 7, y: 0 }],
+    lago: null, fogos: [], pontos: []
+  },
+  incendio: {
+    titulo: 'Apagar o incêndio',
+    descricao: 'Há um incêndio 🔥 na floresta. O robô precisa pegar água 💧 no lago e levá-la até o fogo para apagá-lo. Apagar exige ter água.',
+    inicio: { x: 0, y: 6 },
+    lago: { x: 3, y: 6 },
+    fogos: [{ x: 7, y: 2 }],
+    arvores: [], pontos: [], saida: null
+  },
+  monitoramento: {
+    titulo: 'Monitorar os pontos',
+    descricao: 'Visite todos os pontos de monitoramento 📍 da trilha. Ao passar sobre um ponto, ele é registrado como visitado ✅.',
+    inicio: { x: 0, y: 3 },
+    pontos: [{ x: 2, y: 3 }, { x: 4, y: 3 }, { x: 6, y: 3 }, { x: 8, y: 3 }],
+    arvores: [], fogos: [], lago: null, saida: null
+  }
+};
+
+let missaoAtual = MISSOES.saida;
+let estado = novoEstado(missaoAtual);
+let executando = false;
+let ocupado = false;
+let nivelDica = 0;     // dicas usadas nesta missão (máximo 3)
+let tentativas = 0;    // programas executados nesta missão
+let ultimoPassos = null;
+let reproducao = null;     // { programa, frames, indice, timer, finalizada }
+let ultimoPrograma = null; // para o botão "Executar de novo"
+const historico = []; // {role: 'user' | 'model', text: string}
+
+/* ==========================================================================
+   ELEMENTOS
+   ========================================================================== */
+
+const canvas = document.getElementById('tela');
+const ctx = canvas.getContext('2d');
+const chat = document.getElementById('chat');
+const entrada = document.getElementById('entrada');
+const logEl = document.getElementById('log');
+const selMissao = document.getElementById('missao');
+const objetivoEl = document.getElementById('objetivo');
+const statusEl = document.getElementById('status');
+
+/* ==========================================================================
+   STATUS: mostra o que o programa está fazendo agora
+   ========================================================================== */
+
+let timerStatus = null, inicioStatus = 0, textoStatus = '';
+
+// medir = true mostra um contador de segundos enquanto a etapa dura
+function status(texto, medir = false) {
+  clearInterval(timerStatus);
+  textoStatus = texto;
+  inicioStatus = Date.now();
+  const atualiza = () => {
+    const seg = Math.floor((Date.now() - inicioStatus) / 1000);
+    statusEl.textContent = medir ? `${textoStatus} (${seg}s)` : textoStatus;
+  };
+  atualiza();
+  if (medir) timerStatus = setInterval(atualiza, 1000);
+}
+
+function statusPronto(texto = 'Pronto.') {
+  clearInterval(timerStatus);
+  statusEl.textContent = texto;
+}
+
+/* ==========================================================================
+   ESTADO E DESENHO
+   ========================================================================== */
+
+function novoEstado(m) {
+  return {
+    pos: { ...m.inicio },
+    agua: false,
+    saida: m.saida,
+    lago: m.lago,
+    arvores: m.arvores,
+    pontos: m.pontos,
+    fogos: m.fogos.map(f => ({ ...f })),
+    visitados: new Set(),
+    passos: 0
+  };
+}
+
+function tem(lista, x, y) {
+  return lista.some(p => p.x === x && p.y === y);
+}
+
+function emoji(e, x, y, tamanho = 36) {
+  // restaura cor e opacidade (as coordenadas usam transparência e isso vazava para os emojis)
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `${tamanho}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(e, x * TILE + TILE / 2, y * TILE + TILE / 2);
+}
+
+function desenhar() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      ctx.fillStyle = (x + y) % 2 ? '#2e5d3a' : '#346b43';
+      ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+    }
+  }
+
+  if (estado.lago) {
+    ctx.fillStyle = '#1d4ed8';
+    ctx.fillRect(estado.lago.x * TILE, estado.lago.y * TILE, TILE, TILE);
+    emoji('💧', estado.lago.x, estado.lago.y);
+  }
+
+  // coordenadas (x,y) no canto de cada casa, para o usuário se orientar
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++)
+      ctx.fillText(`${x},${y}`, x * TILE + 3, y * TILE + 3);
+
+  estado.arvores.forEach(a => emoji('🌳', a.x, a.y));
+
+  estado.pontos.forEach(p => {
+    const visitado = estado.visitados.has(`${p.x},${p.y}`);
+    emoji(visitado ? '✅' : '📍', p.x, p.y, 30);
+  });
+
+  if (estado.saida) emoji('🚩', estado.saida.x, estado.saida.y);
+
+  estado.fogos.forEach(f => emoji('🔥', f.x, f.y));
+
+  emoji('🤖', estado.pos.x, estado.pos.y, 40);
+  if (estado.agua) {
+    emoji('💧', estado.pos.x, estado.pos.y, 18);
+    // pequeno indicador de água carregada no canto do robô
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText('💧', estado.pos.x * TILE + TILE - 2, estado.pos.y * TILE + 2);
+  }
+
+  // grade leve
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  for (let x = 0; x <= COLS; x++) {
+    ctx.beginPath(); ctx.moveTo(x * TILE, 0); ctx.lineTo(x * TILE, ROWS * TILE); ctx.stroke();
+  }
+  for (let y = 0; y <= ROWS; y++) {
+    ctx.beginPath(); ctx.moveTo(0, y * TILE); ctx.lineTo(COLS * TILE, y * TILE); ctx.stroke();
+  }
+}
+
+/* ==========================================================================
+   VALIDAÇÃO (a aplicação decide o que é permitido, não a IA)
+   ========================================================================== */
+
+function validar(lista, prof = 0, cont = { n: 0 }) {
+  const erros = [];
+  if (!Array.isArray(lista)) return ['o programa deve ser uma lista de ações'];
+  if (prof > 3) return ['aninhamento muito profundo (máximo 3 níveis)'];
+
+  for (const no of lista) {
+    cont.n++;
+    if (cont.n > 60) return ['programa muito longo (máximo 60 ações)'];
+
+    if (!no || typeof no !== 'object' || !ACOES.includes(no.acao)) {
+      erros.push(`ação inválida: ${JSON.stringify(no)}`);
+      continue;
+    }
+
+    if (no.acao === 'mover') {
+      if (!(no.direcao in DIRECOES)) erros.push(`direção inválida: ${no.direcao}`);
+      if (!Number.isInteger(no.passos) || no.passos < 1 || no.passos > 20)
+        erros.push('passos deve ser um inteiro entre 1 e 20');
+    } else if (no.acao === 'repetir') {
+      if (!Number.isInteger(no.vezes) || no.vezes < 1 || no.vezes > 10)
+        erros.push('vezes deve ser um inteiro entre 1 e 10');
+      erros.push(...validar(no.corpo, prof + 1, cont));
+    } else if (no.acao === 'se') {
+      if (!CONDICOES.includes(no.condicao)) erros.push(`condição inválida: ${no.condicao}`);
+      erros.push(...validar(no.entao, prof + 1, cont));
+    }
+  }
+  return erros;
+}
+
+/* ==========================================================================
+   EXECUÇÃO (o jogo executa somente ações permitidas)
+   ========================================================================== */
+
+class ErroExecucao extends Error {}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function avaliarCondicao(c, e) {
+  if (c === 'tem_fogo') return tem(e.fogos, e.pos.x, e.pos.y);
+  if (c === 'tem_agua') return e.agua;
+  return false;
+}
+
+async function executar(lista, e) {
+  for (const no of lista) {
+    if (no.acao === 'mover') {
+      const d = DIRECOES[no.direcao];
+      for (let i = 0; i < no.passos; i++) {
+        const nx = e.pos.x + d.dx, ny = e.pos.y + d.dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS)
+          throw new ErroExecucao(`o robô tentou sair do mapa ao mover para ${no.direcao} a partir de (${e.pos.x}, ${e.pos.y})`);
+        if (tem(e.arvores, nx, ny))
+          throw new ErroExecucao(`o robô bateu em uma árvore em (${nx}, ${ny}) ao andar a partir de (${e.pos.x}, ${e.pos.y})`);
+
+        e.pos = { x: nx, y: ny };
+        e.passos++;
+        if (e.passos > MAX_PASSOS)
+          throw new ErroExecucao('limite de passos atingido (possível laço infinito)');
+        if (tem(e.pontos, nx, ny)) e.visitados.add(`${nx},${ny}`);
+
+        logar(`mover ${no.direcao} → (${nx}, ${ny})`);
+        status(`Executando: mover ${no.direcao}, passo ${e.passos}`);
+        desenhar();
+        await sleep(DELAY);
+      }
+    } else if (no.acao === 'pegar') {
+      if (!(e.lago && e.lago.x === e.pos.x && e.lago.y === e.pos.y))
+        throw new ErroExecucao('pegar: não há água nesta posição');
+      e.agua = true;
+      logar('pegou água 💧');
+      desenhar();
+      await sleep(DELAY);
+    } else if (no.acao === 'apagar') {
+      if (!tem(e.fogos, e.pos.x, e.pos.y))
+        throw new ErroExecucao('apagar: não há fogo nesta posição');
+      if (!e.agua)
+        throw new ErroExecucao('apagar: o robô precisa ter água antes de apagar o fogo');
+      e.fogos = e.fogos.filter(f => !(f.x === e.pos.x && f.y === e.pos.y));
+      e.agua = false;
+      logar('apagou o fogo 🔥➡️💨');
+      desenhar();
+      await sleep(DELAY);
+    } else if (no.acao === 'se') {
+      const v = avaliarCondicao(no.condicao, e);
+      logar(`se ${no.condicao}: ${v ? 'verdadeiro' : 'falso'}`);
+      if (v) await executar(no.entao, e);
+    } else if (no.acao === 'repetir') {
+      for (let i = 0; i < no.vezes; i++) {
+        logar(`repetir: volta ${i + 1} de ${no.vezes}`);
+        await executar(no.corpo, e);
+      }
+    }
+  }
+}
+
+// Busca em largura: menor número de passos entre duas casas, evitando árvores
+function distanciaMinima(a, b, arvores) {
+  if (!a || !b) return 0;
+  const chave = (x, y) => `${x},${y}`;
+  const bloqueadas = new Set(arvores.map(t => chave(t.x, t.y)));
+  const dist = new Map([[chave(a.x, a.y), 0]]);
+  const fila = [{ x: a.x, y: a.y }];
+  while (fila.length) {
+    const atual = fila.shift();
+    if (atual.x === b.x && atual.y === b.y) return dist.get(chave(b.x, b.y));
+    for (const d of Object.values(DIRECOES)) {
+      const nx = atual.x + d.dx, ny = atual.y + d.dy;
+      const k = chave(nx, ny);
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || bloqueadas.has(k) || dist.has(k)) continue;
+      dist.set(k, dist.get(chave(atual.x, atual.y)) + 1);
+      fila.push({ x: nx, y: ny });
+    }
+  }
+  return Infinity;
+}
+
+// Menor número de passos para cumprir a missão (testa todas as ordens dos pontos)
+function menorCaminho(m) {
+  const arv = m.arvores;
+  if (m === MISSOES.saida) return distanciaMinima(m.inicio, m.saida, arv);
+  if (m === MISSOES.incendio) return distanciaMinima(m.inicio, m.lago, arv) + distanciaMinima(m.lago, m.fogos[0], arv);
+  if (m === MISSOES.monitoramento) {
+    let melhor = Infinity;
+    const permutar = (restantes, atual, custo) => {
+      if (custo >= melhor) return;
+      if (!restantes.length) { melhor = Math.min(melhor, custo); return; }
+      restantes.forEach((p, i) => {
+        const proximos = restantes.filter((_, j) => j !== i);
+        permutar(proximos, p, custo + distanciaMinima(atual, p, arv));
+      });
+    };
+    permutar(m.pontos, m.inicio, 0);
+    return melhor;
+  }
+  return null;
+}
+
+function atualizarStats() {
+  const partes = [`Tentativas: ${tentativas}`];
+  if (ultimoPassos !== null) partes.push(`Último programa: ${ultimoPassos} passos`);
+  if (tentativas > 0) partes.push(`Menor caminho possível: ${menorCaminho(missaoAtual)} passos`);
+  document.getElementById('stats').textContent = partes.join(' · ');
+  document.getElementById('dica').textContent = `💡 Dica (${nivelDica}/3)`;
+}
+
+async function pedirDica() {
+  if (ocupado || executando) return;
+  if (nivelDica >= 3) {
+    addMsg('Você já usou as 3 dicas desta missão.', 'sistema');
+    return;
+  }
+  nivelDica++;
+  atualizarStats();
+  ocupado = true;
+  addMsg(`💡 Pedido de dica (nível ${nivelDica} de 3)`, 'usuario');
+  try {
+    await falarComTutor(
+      `[SISTEMA] O usuário pediu uma dica de nível ${nivelDica} de 3. ` +
+      'Nível 1: dê uma pista sobre o conceito certo para esta situação, em uma ou duas frases, sem dizer o caminho, e termine com uma pergunta curta. ' +
+      'Nível 2: diga a direção geral ou as etapas do caminho (por exemplo, primeiro contornar a árvore e depois subir), sem números exatos. ' +
+      'Nível 3: diga a quantidade aproximada de passos da próxima etapa, sem entregar o programa completo. ' +
+      'Dê sempre uma dica concreta. Não peça ao usuário para explicar a intenção: o contexto da missão já está informado. Não use status "pronto".',
+      'sistema'
+    );
+  } finally {
+    ocupado = false;
+    statusPronto('Dica entregue.');
+  }
+}
+
+function missaoCumprida(m, e) {
+  if (m === MISSOES.saida) return e.pos.x === e.saida.x && e.pos.y === e.saida.y;
+  if (m === MISSOES.incendio) return e.fogos.length === 0;
+  if (m === MISSOES.monitoramento) return e.visitados.size === e.pontos.length;
+  return false;
+}
+
+/* ==========================================================================
+   GEMMA (tutor) — chamada direta à Gemini API
+   ========================================================================== */
+
+/* ==========================================================================
+   CONCEITOS (aparecem destacados só quando a missão é cumprida)
+   ========================================================================== */
+
+const CONCEITOS = {
+  sequencia: {
+    nome: 'Sequência',
+    termos: ['sequência', 'sequencia'],
+    definicao: 'As instruções são executadas uma depois da outra, na ordem em que foram escritas. Mudar a ordem muda o resultado.',
+    exemplo: 'descer 3 casas e depois ir para a direita leva a um lugar diferente de ir para a direita e depois descer.'
+  },
+  repeticao: {
+    nome: 'Repetição',
+    termos: ['repetição', 'repeticao'],
+    definicao: 'Um conjunto de ações é executado várias vezes sem precisar escrever cada uma delas. No jogo, isso é o bloco repetir.',
+    exemplo: 'repetir 4 vezes "mover direita 2" faz o robô andar 8 casas para a direita com um único bloco.'
+  },
+  condicional: {
+    nome: 'Condicional',
+    termos: ['condicional', 'condicionais'],
+    definicao: 'O programa escolhe um caminho dependendo de uma condição ser verdadeira ou falsa. No jogo, isso é o bloco se.',
+    exemplo: 'se tem_fogo, apagar: a ação só acontece quando há fogo na casa do robô.'
+  },
+  variavel: {
+    nome: 'Variável',
+    termos: ['variável', 'variavel', 'variáveis', 'variaveis'],
+    definicao: 'Um valor guardado durante a execução, que pode mudar ao longo do programa. No jogo, a água que o robô carrega funciona assim.',
+    exemplo: 'pegar água muda a informação "tem água" para verdadeiro, e apagar o fogo volta para falso.'
+  }
+};
+
+// Descobre quais conceitos o programa usou, olhando as ações (não depende da IA)
+function conceitosDoPrograma(programa) {
+  const s = JSON.stringify(programa);
+  const acc = [];
+  if (/"acao":"(mover|pegar|apagar)"/.test(s)) acc.push('sequencia');
+  if (s.includes('"acao":"repetir"')) acc.push('repeticao');
+  if (s.includes('"acao":"se"')) acc.push('condicional');
+  if ((s.includes('"acao":"pegar"') && s.includes('"acao":"apagar"')) || s.includes('tem_agua')) acc.push('variavel');
+  return acc;
+}
+
+// Escapa o texto e envolve os termos dos conceitos em <span> clicável
+function destacarConceitos(texto, ids) {
+  const escapado = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (!ids.length) return escapado;
+  const mapa = {};
+  for (const id of ids) for (const t of CONCEITOS[id].termos) mapa[t.toLowerCase()] = id;
+  const termos = Object.keys(mapa).sort((a, b) => b.length - a.length);
+  const re = new RegExp(`\\b(${termos.join('|')})\\b`, 'gi');
+  return escapado.replace(re, m => `<span class="conceito" data-id="${mapa[m.toLowerCase()]}">${m}</span>`);
+}
+
+function mostrarDefinicao(id) {
+  const c = CONCEITOS[id];
+  if (!c) return;
+  document.getElementById('definicao').innerHTML =
+    `<strong>${c.nome}</strong><br>${c.definicao}<br><em>Exemplo no jogo:</em> ${c.exemplo}`;
+}
+
+function descricaoObjetivo(m) {
+  if (m === MISSOES.saida) return `chegar à saída em (${m.saida.x}, ${m.saida.y})`;
+  if (m === MISSOES.incendio) return `apagar o fogo em (${m.fogos[0].x}, ${m.fogos[0].y}) depois de pegar água no lago`;
+  if (m === MISSOES.monitoramento) return 'visitar todos os pontos de monitoramento: ' + m.pontos.map(p => `(${p.x}, ${p.y})`).join(', ');
+  return '';
+}
+
+const INSTRUCOES = [
+  'Você é o tutor de pensamento algorítmico de um jogo em que o usuário programa um robô que atua na Amazônia.',
+  'Seu papel é ensinar a transformar uma intenção em um algoritmo claro. Não é gerar código de uma linguagem.',
+  '',
+  'REGRAS:',
+  '- Se a instrução do usuário estiver incompleta ou ambígua, NÃO invente a solução. Faça UMA pergunta objetiva por vez e explique por que aquela informação é necessária. Use status "incompleto".',
+  '- Quando a instrução tiver direções e números de passos (mesmo que você ache que não alcança o objetivo), traduza-a em programa usando SOMENTE as ações permitidas abaixo e use status "pronto". Não julgue se o caminho vai funcionar nem diga que vai bater ou falhar: o jogo mostra o resultado ao usuário.',
+  '- Não cite nomes de conceitos de programação em respostas de instrução incompleta. Eles só devem aparecer quando a missão for cumprida.',
+  '- Quando o relatório do sistema ([SISTEMA]) disser que a missão NÃO foi cumprida: NÃO elogie. Compare a posição final com o objetivo informado no relatório e explique com clareza por que o objetivo não foi alcançado (por exemplo: o robô parou em outra casa, bateu numa árvore, ficou sem água). Depois faça UMA pergunta ou dica para corrigir, sem entregar a solução pronta.',
+  '- Quando o relatório disser que a missão FOI cumprida: parabenize e explique brevemente como o programa usou sequência, repetição, condicional ou variável, citando esses nomes exatamente, para que o sistema os destaque.',
+  '- Nunca diga que o objetivo foi alcançado se o relatório disser que não foi.',
+  '- Quando a missão for cumprida, se existir uma forma mais curta ou simples de fazer o mesmo caminho, sugira-a como desafio, sem entregar a solução pronta.',
+  '- Não use markdown: nada de asteriscos, negrito ou listas com símbolos. Escreva texto simples.',
+  '- Quando o relatório mostrar Passos dados maior que o Menor caminho possível e a missão foi cumprida, sugira um desafio para achar um caminho mais curto, sem dar a solução.',
+  '- Quando receber um pedido de dica, siga exatamente o nível pedido e nunca entregue o programa completo.',
+  '- Ao montar um programa (status "pronto"), NÃO afirme que o objetivo foi ou será alcançado. Isso só é informado depois da execução.',
+  '- Ao explicar um erro de posição, use a frase "A saída fica ... do robô" que vem no relatório, e lembre que "cima" diminui y e "baixo" aumenta y.',
+  '- Avaliação qualitativa e formativa. Não atribua notas numéricas.',
+  '- Escreva em português, de forma curta e acolhedora.',
+  '',
+  'AÇÕES PERMITIDAS:',
+  '- {"acao":"mover","direcao":"cima|baixo|esquerda|direita","passos":1 a 20}',
+  '- {"acao":"pegar"}  (só funciona sobre o lago 💧)',
+  '- {"acao":"apagar"}  (só funciona sobre o fogo 🔥 e com água)',
+  '- {"acao":"se","condicao":"tem_fogo|tem_agua","entao":[ ... ]}',
+  '- {"acao":"repetir","vezes":1 a 10,"corpo":[ ... ]}',
+  '',
+  'FORMATO DE RESPOSTA: responda APENAS com um objeto JSON, sem texto fora dele:',
+  '{"status":"incompleto" ou "pronto","explicacao":"texto para o usuário","pergunta":"pergunta ou null","programa":[]}',
+  'Use programa [] enquanto o status for "incompleto".',
+  'Escreva frases completas em "explicacao" e "pergunta". Nunca use "..." nem deixe campos vazios.',
+  'EXEMPLO DE FORMATO (apenas a estrutura; escreva o conteúdo para a situação atual):',
+  '{"status":"incompleto","explicacao":"Você definiu o objetivo, mas ainda falta descrever o caminho.","pergunta":"Em qual direção o robô deve começar e quantos passos deve dar?","programa":[]}'
+].join('\n');
+
+function obterChave() {
+  return API_KEY || localStorage.getItem('gemini_key') || '';
+}
+
+// Tenta de novo uma vez quando o servidor responde erro temporário (429, 500, 503)
+async function fetchComRetry(url, opcoes) {
+  let r;
+  for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    r = await fetch(url, opcoes);
+    if (r.ok || tentativa === 3 || ![429, 500, 503].includes(r.status)) return r;
+    status(`O servidor do Gemma respondeu ${r.status}. Tentando de novo (${tentativa + 1}/3)...`, true);
+    await sleep(2000 * tentativa);
+  }
+  return r;
+}
+
+async function chamarGemma(contents) {
+  const key = obterChave();
+  if (!key) throw new Error('sem API key (cole a chave no campo abaixo ou em API_KEY)');
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMMA_MODEL}:generateContent`;
+  const r = await fetchComRetry(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify({
+      contents,
+      generationConfig: {
+        temperature: 0.4,
+        maxOutputTokens: 1024,
+        // "minimal" desliga o raciocínio interno do Gemma 4 (deixa a resposta bem mais rápida)
+        thinkingConfig: { thinkingLevel: 'minimal' }
+      }
+    })
+  });
+  if (!r.ok) {
+    const detalhe = await r.text();
+    console.error('Detalhe do erro da API:', detalhe);
+    throw new Error(`o servidor do Google respondeu com erro ${r.status} mesmo após as novas tentativas`);
+  }
+
+  const data = await r.json();
+  // ignora partes marcadas como "pensamento", se a API as enviar
+  const partes = (data.candidates?.[0]?.content?.parts || []).filter(p => !p.thought);
+  return partes.map(p => p.text || '').join('');
+}
+
+// Extrai o primeiro objeto JSON completo da resposta, ignorando texto extra
+// e cercas de markdown (```json ... ```). Respeita strings e chaves aninhadas.
+// Encontra todos os objetos JSON de topo na resposta e devolve o último com a chave "status".
+// Assim, se o modelo escrever rascunhos com chaves antes da resposta final, usamos a resposta final.
+function extrairJSON(texto) {
+  const limpo = texto.replace(/```(json)?/gi, '');
+  const trechos = [];
+  let inicio = -1, profundidade = 0, emString = false, escape = false;
+
+  for (let i = 0; i < limpo.length; i++) {
+    const c = limpo[i];
+    if (emString) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') emString = false;
+      continue;
+    }
+    if (c === '"') {
+      if (profundidade > 0) emString = true;
+    } else if (c === '{') {
+      if (profundidade === 0) inicio = i;
+      profundidade++;
+    } else if (c === '}' && profundidade > 0) {
+      profundidade--;
+      if (profundidade === 0) trechos.push(limpo.slice(inicio, i + 1));
+    }
+  }
+
+  const objetos = [];
+  for (const t of trechos) {
+    try { objetos.push(JSON.parse(t)); } catch (e) { /* trecho não é JSON válido */ }
+  }
+  if (!objetos.length) throw new Error('a resposta não contém um JSON válido');
+
+  const final = [...objetos].reverse().find(o => o && typeof o === 'object' && 'status' in o);
+  return final || objetos[objetos.length - 1];
+}
+
+function contextoMissao() {
+  const m = missaoAtual, e = estado;
+  const p = o => `(${o.x}, ${o.y})`;
+  const lista = arr => arr.length ? arr.map(p).join(', ') : 'nenhum';
+  return [
+    `MISSÃO: ${m.titulo}. ${m.descricao}`,
+    'GRADE: 10 colunas (x de 0 a 9) por 7 linhas (y de 0 a 6). Qualquer movimento que saia dessa área é erro.',
+    'SISTEMA DE COORDENADAS: x cresce para a DIREITA; y cresce para BAIXO (y = 0 é a linha do topo). "cima" DIMINUI y; "baixo" AUMENTA y.',
+    `MAPA: início ${p(m.inicio)}`,
+    m.saida ? `saída ${p(m.saida)}` : null,
+    m.lago ? `lago de água ${p(m.lago)}` : null,
+    m.fogos.length ? `fogos ${lista(m.fogos)}` : null,
+    m.pontos.length ? `pontos de monitoramento ${lista(m.pontos)}` : null,
+    m.arvores.length ? `árvores ${lista(m.arvores)}` : null,
+    `ESTADO ATUAL DO ROBÔ: posição ${p(e.pos)}, com água: ${e.agua}, fogos restantes: ${e.fogos.length}, pontos visitados: ${e.visitados.size}/${e.pontos.length}.`
+  ].filter(Boolean).join('\n');
+}
+
+// Onde o alvo está em relação ao robô. Ex.: "1 casa(s) acima"
+function posicaoRelativa(pos, alvo) {
+  const dx = alvo.x - pos.x, dy = alvo.y - pos.y;
+  const partes = [];
+  if (dy < 0) partes.push(`${-dy} casa(s) acima`);
+  if (dy > 0) partes.push(`${dy} casa(s) abaixo`);
+  if (dx < 0) partes.push(`${-dx} casa(s) à esquerda`);
+  if (dx > 0) partes.push(`${dx} casa(s) à direita`);
+  return partes.length ? partes.join(' e ') : 'na mesma casa';
+}
+
+// Texto curto do programa para mostrar ao usuário antes de executar
+function resumoPrograma(lista) {
+  return lista.map(no => {
+    if (no.acao === 'mover') return `${no.direcao} ${no.passos}`;
+    if (no.acao === 'pegar') return 'pegar água';
+    if (no.acao === 'apagar') return 'apagar fogo';
+    if (no.acao === 'se') return `se ${no.condicao} [${resumoPrograma(no.entao || [])}]`;
+    if (no.acao === 'repetir') return `repetir ${no.vezes}x [${resumoPrograma(no.corpo || [])}]`;
+    return '?';
+  }).join(' → ');
+}
+
+function mostrarTutor(r, conceitos = []) {
+  // remove marcações de markdown (**negrito**, *itálico*) que o chat não renderiza
+  const limpar = t => String(t || '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1');
+  let texto = limpar(r.explicacao);
+  if (r.pergunta) texto += `\n\n❓ ${limpar(r.pergunta)}`;
+  addMsgHTML(destacarConceitos(texto, conceitos), 'tutor');
+}
+
+async function falarComTutor(texto, tipo, conceitos = []) {
+  historico.push({ role: 'user', text: texto });
+  let bruto = '';
+  try {
+    const recentes = historico.slice(-12);
+    const msgs = recentes.map((h, i) => ({
+      role: h.role,
+      parts: [{ text: i === recentes.length - 1 ? contextoMissao() + '\n\n' + h.text : h.text }]
+    }));
+    const contents = [
+      { role: 'user', parts: [{ text: INSTRUCOES }] },
+      { role: 'model', parts: [{ text: 'Entendido. Responderei apenas em JSON.' }] },
+      ...msgs
+    ];
+
+    status('Aguardando o tutor Gemma responder...', true);
+    bruto = await chamarGemma(contents);
+    status('Resposta recebida. Interpretando...');
+    const r = extrairJSON(bruto);
+    if (!r.explicacao || /^[\s.…?]*$/.test(String(r.explicacao))) {
+      throw new Error('o tutor não escreveu a explicação (veio vazia ou só com "...")');
+    }
+    statusPronto('Resposta do tutor recebida.');
+    historico.push({ role: 'model', text: bruto });
+    const vaiExecutar = tipo === 'usuario' && r.status === 'pronto' && Array.isArray(r.programa) && r.programa.length > 0;
+    if (vaiExecutar) addMsg(`🧩 Programa montado: ${resumoPrograma(r.programa)}`, 'sistema');
+    else mostrarTutor(r, conceitos);
+    return r;
+  } catch (err) {
+    historico.pop();
+    statusPronto('Erro ao falar com o tutor (veja a mensagem no chat).');
+    // mostra o começo da resposta bruta, para diagnosticar o problema
+    const trecho = bruto ? `\nResposta recebida (início): ${bruto.slice(0, 300)}` : '';
+    addMsg(`Não consegui entender a resposta do tutor: ${err.message}${trecho}\nVocê ainda pode usar o modo manual.`, 'sistema');
+    console.error('Erro no tutor:', err, bruto);
+    return null;
+  }
+}
+
+/* ==========================================================================
+   FLUXO PRINCIPAL
+   ========================================================================== */
+
+async function executarProgramaAntigo(programa) {
+  if (executando) return;
+  status('Validando o programa...');
+  const erros = validar(programa);
+
+  if (erros.length) {
+    addMsg('Programa rejeitado pela validação:\n- ' + erros.join('\n- '), 'sistema');
+    await falarComTutor(`[SISTEMA] O programa não passou na validação: ${erros.join('; ')}. Explique o problema sem entregar a solução pronta.`, 'sistema');
+    return;
+  }
+
+  executando = true;
+  tentativas++;
+  status('Executando o programa no jogo...');
+  estado = novoEstado(missaoAtual);
+  logEl.innerHTML = '';
+  desenhar();
+
+  let erroExec = null;
+  try {
+    await executar(programa, estado);
+  } catch (err) {
+    erroExec = err.message;
+    logar('ERRO: ' + erroExec);
+  }
+
+  const ok = !erroExec && missaoCumprida(missaoAtual, estado);
+  desenhar();
+  executando = false;
+  ultimoPassos = estado.passos;
+  atualizarStats();
+  statusPronto(`Execução terminada: ${ok ? 'missão cumprida' : 'missão não cumprida'}${erroExec ? ' (com erro)' : ''}. Pedindo explicação ao tutor...`);
+
+  const relatorio = `[SISTEMA] Resultado da execução: ${ok ? 'missão cumprida' : 'missão NÃO cumprida'}.` +
+    (erroExec ? ` Erro: ${erroExec}.` : '') +
+    ` Objetivo: ${descricaoObjetivo(missaoAtual)}.` +
+    (estado.saida && !ok ? ` A saída fica ${posicaoRelativa(estado.pos, estado.saida)} do robô.` : '') +
+    ` Passos dados: ${estado.passos}. Menor caminho possível: ${menorCaminho(missaoAtual)} passos. Estado final: posição (${estado.pos.x}, ${estado.pos.y}), com água: ${estado.agua}, fogos restantes: ${estado.fogos.length}, pontos visitados: ${estado.visitados.size}/${estado.pontos.length}. Explique o que aconteceu e oriente a melhoria.`;
+
+  addMsg(ok ? '🎉 Missão cumprida!' : '⚠️ A missão ainda não foi cumprida.', 'sistema');
+  const conceitos = ok ? conceitosDoPrograma(programa) : [];
+  await falarComTutor(relatorio, 'sistema', conceitos);
+  if (ok && conceitos.length) {
+    addMsgHTML('🎓 Conceitos aplicados: ' +
+      conceitos.map(id => `<span class="conceito" data-id="${id}">${CONCEITOS[id].nome}</span>`).join(' · '), 'sistema');
+  }
+  if (ok) addMsg('Escolha outra missão ou tente um caminho diferente.', 'sistema');
+}
+
+/* ==========================================================================
+   SIMULAÇÃO E REPRODUÇÃO PASSO A PASSO
+   O programa é simulado inteiro antes; depois o usuário reproduz os passos
+   com controles (início, anterior, continuar/pausar, próximo, fim, cancelar).
+   ========================================================================== */
+
+// Roda o programa sem animação e guarda uma "foto" do estado a cada passo
+function simular(programa) {
+  const frames = [];
+  const e = novoEstado(missaoAtual);
+
+  const foto = (acao, erro = null) => frames.push({
+    pos: { ...e.pos },
+    agua: e.agua,
+    fogos: e.fogos.map(f => ({ ...f })),
+    visitados: [...e.visitados],
+    passos: e.passos,
+    acao,
+    erro
+  });
+  foto('Início');
+
+  const percorrer = lista => {
+    for (const no of lista) {
+      if (no.acao === 'mover') {
+        const d = DIRECOES[no.direcao];
+        for (let i = 0; i < no.passos; i++) {
+          const nx = e.pos.x + d.dx, ny = e.pos.y + d.dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS)
+            throw new ErroExecucao(`o robô tentou sair do mapa ao mover para ${no.direcao} a partir de (${e.pos.x}, ${e.pos.y})`);
+          if (tem(e.arvores, nx, ny))
+            throw new ErroExecucao(`o robô bateu em uma árvore em (${nx}, ${ny}) ao andar a partir de (${e.pos.x}, ${e.pos.y})`);
+          e.pos = { x: nx, y: ny };
+          e.passos++;
+          if (e.passos > MAX_PASSOS)
+            throw new ErroExecucao('limite de passos atingido (possível laço infinito)');
+          if (tem(e.pontos, nx, ny)) e.visitados.add(`${nx},${ny}`);
+          foto(`mover ${no.direcao} → (${nx}, ${ny})`);
+        }
+      } else if (no.acao === 'pegar') {
+        if (!(e.lago && e.lago.x === e.pos.x && e.lago.y === e.pos.y))
+          throw new ErroExecucao('pegar: não há água nesta posição');
+        e.agua = true;
+        foto('pegou água 💧');
+      } else if (no.acao === 'apagar') {
+        if (!tem(e.fogos, e.pos.x, e.pos.y))
+          throw new ErroExecucao('apagar: não há fogo nesta posição');
+        if (!e.agua)
+          throw new ErroExecucao('apagar: o robô precisa ter água antes de apagar o fogo');
+        e.fogos = e.fogos.filter(f => !(f.x === e.pos.x && f.y === e.pos.y));
+        e.agua = false;
+        foto('apagou o fogo 🔥➡️💨');
+      } else if (no.acao === 'se') {
+        const v = avaliarCondicao(no.condicao, e);
+        foto(`se ${no.condicao}: ${v ? 'verdadeiro' : 'falso'}`);
+        if (v) percorrer(no.entao);
+      } else if (no.acao === 'repetir') {
+        for (let i = 0; i < no.vezes; i++) {
+          foto(`repetir: volta ${i + 1} de ${no.vezes}`);
+          percorrer(no.corpo);
+        }
+      }
+    }
+  };
+
+  try {
+    percorrer(programa);
+  } catch (err) {
+    foto(`ERRO: ${err.message}`, err.message);
+  }
+  return frames;
+}
+
+// Converte uma foto da simulação no formato que o desenho e as regras usam
+function estadoDoFrame(f) {
+  return {
+    pos: f.pos,
+    agua: f.agua,
+    fogos: f.fogos,
+    visitados: new Set(f.visitados),
+    passos: f.passos,
+    saida: missaoAtual.saida,
+    lago: missaoAtual.lago,
+    arvores: missaoAtual.arvores,
+    pontos: missaoAtual.pontos
+  };
+}
+
+function atualizarControles() {
+  const r = reproducao;
+  const ativo = !!r;
+  ['c-inicio', 'c-ant', 'c-prox', 'c-fim', 'c-cancel', 'c-play'].forEach(id => {
+    document.getElementById(id).disabled = !ativo;
+  });
+  const botaoPlay = document.getElementById('c-play');
+  botaoPlay.textContent = r && r.timer ? '⏸ Pausar' : '▶ Continuar';
+  document.getElementById('c-rerun').disabled = !ultimoPrograma;
+}
+
+function pausar() {
+  if (reproducao && reproducao.timer) {
+    clearInterval(reproducao.timer);
+    reproducao.timer = null;
+  }
+  atualizarControles();
+}
+
+// Mostra o passo de número i e refaz o log até ali
+function irParaFrame(i) {
+  const r = reproducao;
+  if (!r) return;
+  r.indice = Math.max(0, Math.min(i, r.frames.length - 1));
+  const f = r.frames[r.indice];
+  estado = estadoDoFrame(f);
+  desenhar();
+  logEl.innerHTML = '';
+  r.frames.slice(1, r.indice + 1).forEach(x => logar(x.acao));
+  statusPronto(`Passo ${r.indice} de ${r.frames.length - 1}: ${f.acao}`);
+  atualizarControles();
+  if (r.indice === r.frames.length - 1) {
+    if (!r.finalizada) {
+      finalizarExecucao();
+    } else {
+      const ok = !f.erro && missaoCumprida(missaoAtual, estadoDoFrame(f));
+      statusPronto(`Reprodução concluída: ${ok ? 'missão cumprida' : 'missão não cumprida'}.`);
+    }
+  }
+}
+
+function play() {
+  const r = reproducao;
+  if (!r || r.timer) return;
+  if (r.indice >= r.frames.length - 1) irParaFrame(0);
+  r.timer = setInterval(() => {
+    if (r.indice >= r.frames.length - 1) { pausar(); return; }
+    irParaFrame(r.indice + 1);
+  }, DELAY);
+  atualizarControles();
+}
+
+function cancelarReproducao() {
+  pausar();
+  reproducao = null;
+  executando = false;
+  estado = novoEstado(missaoAtual);
+  logEl.innerHTML = '';
+  desenhar();
+  statusPronto('Execução cancelada.');
+  atualizarControles();
+}
+
+// Chamado quando a reprodução chega ao último passo: mostra o resultado e fala com o tutor
+async function finalizarExecucao() {
+  const r = reproducao;
+  if (!r || r.finalizada) return;
+  r.finalizada = true;
+  pausar();
+  executando = false;
+
+  const f = r.frames[r.frames.length - 1];
+  const e = estadoDoFrame(f);
+  const ok = !f.erro && missaoCumprida(missaoAtual, e);
+  ultimoPassos = f.passos;
+  atualizarStats();
+
+  addMsg(ok ? '🎉 Missão cumprida!' : '⚠️ A missão ainda não foi cumprida.', 'sistema');
+  const conceitos = ok ? conceitosDoPrograma(r.programa) : [];
+  const relatorio = `[SISTEMA] Resultado da execução: ${ok ? 'missão cumprida' : 'missão NÃO cumprida'}.` +
+    (f.erro ? ` Erro: ${f.erro}.` : '') +
+    ` Objetivo: ${descricaoObjetivo(missaoAtual)}.` +
+    (e.saida && !ok ? ` A saída fica ${posicaoRelativa(e.pos, e.saida)} do robô.` : '') +
+    ` Passos dados: ${f.passos}. Menor caminho possível: ${menorCaminho(missaoAtual)} passos.` +
+    ` Estado final: posição (${e.pos.x}, ${e.pos.y}), com água: ${e.agua}, fogos restantes: ${e.fogos.length}, pontos visitados: ${e.visitados.size}/${e.pontos.length}.` +
+    ' Explique o que aconteceu e oriente a melhoria.';
+
+  await falarComTutor(relatorio, 'sistema', conceitos);
+  if (ok && conceitos.length) {
+    addMsgHTML('🎓 Conceitos aplicados: ' +
+      conceitos.map(id => `<span class="conceito" data-id="${id}">${CONCEITOS[id].nome}</span>`).join(' · '), 'sistema');
+  }
+  if (ok) addMsg('Escolha outra missão ou tente um caminho diferente.', 'sistema');
+  statusPronto('Execução terminada. Use "Executar de novo" para repetir ou os botões para revisar os passos.');
+}
+
+// Valida, simula e começa a reproduzir o programa
+async function executarPrograma(programa, reexecucao = false) {
+  const erros = validar(programa);
+
+  if (erros.length) {
+    addMsg('Programa rejeitado pela validação:\n- ' + erros.join('\n- '), 'sistema');
+    await falarComTutor(`[SISTEMA] O programa não passou na validação: ${erros.join('; ')}. Explique o problema sem entregar a solução pronta.`, 'sistema');
+    return;
+  }
+
+  cancelarReproducao();
+  ultimoPrograma = programa;
+  if (!reexecucao) tentativas++;
+  // na reexecução só reproduz os passos: não fala de novo com o tutor
+  reproducao = { programa, frames: simular(programa), indice: 0, timer: null, finalizada: reexecucao };
+  executando = !reexecucao;
+  irParaFrame(0);
+  play();
+  statusPronto(`Reproduzindo o programa (${reproducao.frames.length - 1} passos). Use os botões para pausar ou revisar.`);
+  atualizarStats();
+}
+
+async function enviar() {
+  const txt = entrada.value.trim();
+  if (!txt || ocupado) return;
+
+  ocupado = true;
+  document.getElementById('enviar').disabled = true;
+  addMsg(txt, 'usuario');
+  entrada.value = '';
+  status('Enviando sua mensagem ao tutor...');
+
+  try {
+    const r = await falarComTutor(txt, 'usuario');
+    if (!r) {
+      // deu erro: devolve o texto à caixa para não ter que digitar de novo
+      if (!entrada.value) entrada.value = txt;
+    } else if (r.status === 'pronto' && Array.isArray(r.programa) && r.programa.length) {
+      await executarPrograma(r.programa);
+    } else {
+      statusPronto('Aguardando sua próxima mensagem.');
+    }
+  } finally {
+    ocupado = false;
+    document.getElementById('enviar').disabled = false;
+  }
+}
+
+// Mensagem com HTML já tratado (usado para destacar conceitos)
+function addMsgHTML(html, tipo) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + tipo;
+  d.innerHTML = html;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addMsg(texto, tipo) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + tipo;
+  d.textContent = texto;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function logar(msg) {
+  const d = document.createElement('div');
+  d.textContent = msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function trocarMissao(chave) {
+  missaoAtual = MISSOES[chave];
+  estado = novoEstado(missaoAtual);
+  historico.length = 0;
+  nivelDica = 0;
+  tentativas = 0;
+  ultimoPassos = null;
+  chat.innerHTML = '';
+  logEl.innerHTML = '';
+  objetivoEl.textContent = missaoAtual.titulo + ': ' + missaoAtual.descricao;
+  atualizarStats();
+  addMsg(`Missão: ${missaoAtual.titulo}.\n${missaoAtual.descricao}\n\nDescreva em linguagem natural o que o robô deve fazer.`, 'tutor');
+  desenhar();
+}
+
+/* ==========================================================================
+   EVENTOS
+   ========================================================================== */
+
+for (const [chave, m] of Object.entries(MISSOES)) {
+  const opt = document.createElement('option');
+  opt.value = chave;
+  opt.textContent = m.titulo;
+  selMissao.appendChild(opt);
+}
+selMissao.onchange = () => trocarMissao(selMissao.value);
+
+document.getElementById('reiniciar').onclick = () => {
+  if (executando) return;
+  estado = novoEstado(missaoAtual);
+  logEl.innerHTML = '';
+  desenhar();
+};
+
+document.getElementById('enviar').onclick = enviar;
+document.getElementById('dica').onclick = pedirDica;
+
+// controles da reprodução passo a passo
+document.getElementById('c-inicio').onclick = () => { pausar(); irParaFrame(0); };
+document.getElementById('c-ant').onclick = () => { pausar(); if (reproducao) irParaFrame(reproducao.indice - 1); };
+document.getElementById('c-prox').onclick = () => { pausar(); if (reproducao) irParaFrame(reproducao.indice + 1); };
+document.getElementById('c-fim').onclick = () => { pausar(); if (reproducao) irParaFrame(reproducao.frames.length - 1); };
+document.getElementById('c-play').onclick = () => { if (reproducao && reproducao.timer) pausar(); else play(); };
+document.getElementById('c-cancel').onclick = cancelarReproducao;
+document.getElementById('c-rerun').onclick = () => { if (ultimoPrograma) executarPrograma(ultimoPrograma, true); };
+
+// clicar em um conceito destacado mostra a definição
+chat.addEventListener('click', e => {
+  const s = e.target.closest('.conceito');
+  if (s) mostrarDefinicao(s.dataset.id);
+});
+
+entrada.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    enviar();
+  }
+});
+
+document.getElementById('executarManual').onclick = () => {
+  const txt = document.getElementById('manual').value.trim();
+  try {
+    const programa = JSON.parse(txt);
+    executarPrograma(programa);
+  } catch (err) {
+    addMsg('JSON inválido: ' + err.message, 'sistema');
+  }
+};
+
+document.getElementById('salvarChave').onclick = () => {
+  const v = document.getElementById('chave').value.trim();
+  localStorage.setItem('gemini_key', v);
+  addMsg(v ? 'Chave salva neste navegador.' : 'Chave removida.', 'sistema');
+};
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const btnVoz = document.getElementById('voz');
+if (SR) {
+  btnVoz.onclick = () => {
+    const rec = new SR();
+    rec.lang = 'pt-BR';
+    rec.onresult = ev => { entrada.value = ev.results[0][0].transcript; };
+    rec.start();
+  };
+} else {
+  btnVoz.disabled = true;
+  btnVoz.title = 'Reconhecimento de voz indisponível neste navegador (use o Chrome)';
+}
+
+trocarMissao('saida');
+</script>
+</body>
+</html>

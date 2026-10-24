@@ -1,0 +1,23 @@
+[
+    {
+        "acao": "mover",
+        "direcao": "direita",
+        "passos": 3
+    },
+    {
+        "acao": "pegar"
+    },
+    {
+        "acao": "mover",
+        "direcao": "direita",
+        "passos": 4
+    },
+    {
+        "acao": "mover",
+        "direcao": "cima",
+        "passos": 4
+    },
+    {
+        "acao": "apagar"
+    }
+]
